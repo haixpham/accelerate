@@ -986,6 +986,79 @@ def skip_first_batches(dataloader, num_batches=0):
     """
     Creates a `torch.utils.data.DataLoader` that will efficiently skip the first `num_batches`.
     """
+    ignore_kwargs = [
+        "batch_size",
+        "shuffle",
+        "sampler",
+        "batch_sampler",
+        "drop_last",
+    ]
+
+    try:
+        from pytorch_lightning.utilities import CombinedLoader
+        if isinstance(dataloader, CombinedLoader):
+            # process CombinedLoader here
+            dataloaders = dataloader.iterables
+            max_length = 0
+            batch_size = None
+            for key, loader in dataloaders.items():
+                max_length = max(loader.total_dataset_length, max_length)
+                batch_size = loader.batch_size
+
+            new_loaders = {}
+            for key, loader in dataloaders.items():
+                dataset = loader.dataset
+                sampler_is_batch_sampler = isinstance(loader.sampler, BatchSampler)
+                batch_sampler = loader.sampler if sampler_is_batch_sampler else loader.batch_sampler
+                
+                loaded_num_samples = num_batches * batch_size
+                if loaded_num_samples >= loader.total_dataset_length:
+                    skip_num_batches = 0
+                elif loader.total_dataset_length < max_length and (max_length - loaded_num_samples < loader.total_dataset_length):
+                    skip_num_batches = (loader.total_dataset_length - (max_length - loaded_num_samples)) // batch_size
+                else:
+                    skip_num_batches = num_batches
+
+                new_batch_sampler = SkipBatchSampler(batch_sampler, skip_batches=skip_num_batches)
+
+                kwargs = {
+                    k: getattr(loader, k, _PYTORCH_DATALOADER_KWARGS[k])
+                    for k in _PYTORCH_DATALOADER_KWARGS
+                    if k not in ignore_kwargs
+                }
+
+                # Need to provide batch_size as batch_sampler is None for Iterable dataset
+                if new_batch_sampler is None:
+                    kwargs["drop_last"] = loader.drop_last
+                    kwargs["batch_size"] = loader.batch_size
+
+                if isinstance(loader, DataLoaderShard):
+                    if new_batch_sampler is None:
+                        # Need to manually skip batches in the dataloader
+                        kwargs["skip_batches"] = skip_num_batches
+                    elif sampler_is_batch_sampler:
+                        kwargs["sampler"] = new_batch_sampler
+                        kwargs["batch_size"] = loader.batch_size
+                    else:
+                        kwargs["batch_sampler"] = new_batch_sampler
+                    new_dataloader = DataLoaderShard(
+                        dataset,
+                        device=loader.device,
+                        rng_types=loader.rng_types,
+                        synchronized_generator=loader.synchronized_generator,
+                        **kwargs,
+                    )
+                else:
+                    if new_batch_sampler is None:
+                        # Need to manually skip batches in the dataloader
+                        new_dataloader = SkipDataLoader(dataset, skip_batches=skip_num_batches, **kwargs)
+                    else:
+                        new_dataloader = DataLoader(dataset, batch_sampler=new_batch_sampler, **kwargs)
+                new_loaders[key] = new_dataloader
+            return CombinedLoader(new_loaders, mode="max_size_cycle")
+    except ImportError:
+        logger.warning("No pytorch lightning found")
+        
     dataset = dataloader.dataset
     sampler_is_batch_sampler = False
     if isinstance(dataset, IterableDataset):
@@ -996,13 +1069,13 @@ def skip_first_batches(dataloader, num_batches=0):
         new_batch_sampler = SkipBatchSampler(batch_sampler, skip_batches=num_batches)
 
     # We ignore all of those since they are all dealt with by our new_batch_sampler
-    ignore_kwargs = [
-        "batch_size",
-        "shuffle",
-        "sampler",
-        "batch_sampler",
-        "drop_last",
-    ]
+    # ignore_kwargs = [
+    #     "batch_size",
+    #     "shuffle",
+    #     "sampler",
+    #     "batch_sampler",
+    #     "drop_last",
+    # ]
 
     kwargs = {
         k: getattr(dataloader, k, _PYTORCH_DATALOADER_KWARGS[k])
