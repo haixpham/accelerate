@@ -1000,23 +1000,43 @@ def skip_first_batches(dataloader, num_batches=0):
             # process CombinedLoader here
             dataloaders = dataloader.iterables
             max_length = 0
-            batch_size = None
+            
+            batch_sizes = set()
+            
             for key, loader in dataloaders.items():
                 max_length = max(loader.total_dataset_length, max_length)
-                batch_size = loader.batch_size
-
+                if isinstance(loader.sampler, BatchSampler):
+                    logger.info("sampler is batch sampler")
+                    batch_size = loader.sample.batch_size
+                    batch_sizes.add(batch_size)
+                else:
+                    batch_size = loader.batch_size
+                    batch_sizes.add(batch_size)
+            
+            assert len(batch_sizes) == 1, f"all loaders must have the same batch size, instead have {batch_sizes}"
+            batch_size = list(batch_sizes)[0]
+                
+            if batch_size is None:
+                raise ValueError("Batch size is None")
+            else:
+                logger.info(f"Batch size = {batch_size}")
+                
+            loaded_num_samples = num_batches * batch_size
+            
             new_loaders = {}
             for key, loader in dataloaders.items():
                 dataset = loader.dataset
                 sampler_is_batch_sampler = isinstance(loader.sampler, BatchSampler)
                 batch_sampler = loader.sampler if sampler_is_batch_sampler else loader.batch_sampler
                 
-                loaded_num_samples = num_batches * batch_size
                 if loaded_num_samples >= loader.total_dataset_length:
-                    skip_num_batches = 0
-                elif loader.total_dataset_length < max_length and (max_length - loaded_num_samples < loader.total_dataset_length):
+                    # will cycle through the whole set again, keep everything
+                    skip_num_batches = 0 
+                elif loader.total_dataset_length < max_length and (max_length - loaded_num_samples <= loader.total_dataset_length):
+                    # the last cycle, so skip the first few batches
                     skip_num_batches = (loader.total_dataset_length - (max_length - loaded_num_samples)) // batch_size
                 else:
+                    # the biggest dataset, skip exactly num_batches
                     skip_num_batches = num_batches
 
                 new_batch_sampler = SkipBatchSampler(batch_sampler, skip_batches=skip_num_batches)
@@ -1028,15 +1048,8 @@ def skip_first_batches(dataloader, num_batches=0):
                 }
 
                 # Need to provide batch_size as batch_sampler is None for Iterable dataset
-                if new_batch_sampler is None:
-                    kwargs["drop_last"] = loader.drop_last
-                    kwargs["batch_size"] = loader.batch_size
-
                 if isinstance(loader, DataLoaderShard):
-                    if new_batch_sampler is None:
-                        # Need to manually skip batches in the dataloader
-                        kwargs["skip_batches"] = skip_num_batches
-                    elif sampler_is_batch_sampler:
+                    if sampler_is_batch_sampler:
                         kwargs["sampler"] = new_batch_sampler
                         kwargs["batch_size"] = loader.batch_size
                     else:
@@ -1049,11 +1062,8 @@ def skip_first_batches(dataloader, num_batches=0):
                         **kwargs,
                     )
                 else:
-                    if new_batch_sampler is None:
-                        # Need to manually skip batches in the dataloader
-                        new_dataloader = SkipDataLoader(dataset, skip_batches=skip_num_batches, **kwargs)
-                    else:
-                        new_dataloader = DataLoader(dataset, batch_sampler=new_batch_sampler, **kwargs)
+                    new_dataloader = DataLoader(dataset, batch_sampler=new_batch_sampler, **kwargs)
+                    
                 new_loaders[key] = new_dataloader
             return CombinedLoader(new_loaders, mode="max_size_cycle")
     except ImportError:
