@@ -1004,16 +1004,12 @@ def skip_first_batches(dataloader, num_batches=0):
             batch_sizes = set()
             
             for key, loader in dataloaders.items():
+                assert isinstance(loader, DataLoaderShard), f"loader class type is not supported: {str(type(loader))}"
                 max_length = max(loader.total_dataset_length, max_length)
-                if isinstance(loader.sampler, BatchSampler):
-                    logger.info("sampler is batch sampler")
-                    batch_size = loader.sample.batch_size
-                    batch_sizes.add(batch_size)
-                else:
-                    batch_size = loader.batch_size
-                    batch_sizes.add(batch_size)
-            
-            assert len(batch_sizes) == 1, f"all loaders must have the same batch size, instead have {batch_sizes}"
+                batch_size = loader.total_batch_size
+                batch_sizes.add(batch_size)
+                
+            assert len(batch_sizes) == 1, f"all loaders must have the same batch size, instead have {str(batch_sizes)}"
             batch_size = list(batch_sizes)[0]
                 
             if batch_size is None:
@@ -1048,21 +1044,20 @@ def skip_first_batches(dataloader, num_batches=0):
                 }
 
                 # Need to provide batch_size as batch_sampler is None for Iterable dataset
-                if isinstance(loader, DataLoaderShard):
-                    if sampler_is_batch_sampler:
-                        kwargs["sampler"] = new_batch_sampler
-                        kwargs["batch_size"] = loader.batch_size
-                    else:
-                        kwargs["batch_sampler"] = new_batch_sampler
-                    new_dataloader = DataLoaderShard(
-                        dataset,
-                        device=loader.device,
-                        rng_types=loader.rng_types,
-                        synchronized_generator=loader.synchronized_generator,
-                        **kwargs,
-                    )
+                
+                if sampler_is_batch_sampler:
+                    kwargs["sampler"] = new_batch_sampler
+                    kwargs["batch_size"] = loader.batch_size
                 else:
-                    new_dataloader = DataLoader(dataset, batch_sampler=new_batch_sampler, **kwargs)
+                    kwargs["batch_sampler"] = new_batch_sampler
+                
+                new_dataloader = DataLoaderShard(
+                    dataset,
+                    device=loader.device,
+                    rng_types=loader.rng_types,
+                    synchronized_generator=loader.synchronized_generator,
+                    **kwargs,
+                )
                     
                 new_loaders[key] = new_dataloader
             return CombinedLoader(new_loaders, mode="max_size_cycle")
