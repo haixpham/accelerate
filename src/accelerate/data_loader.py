@@ -1025,10 +1025,10 @@ def skip_first_batches(dataloader, num_batches=0):
                 sampler_is_batch_sampler = isinstance(loader.sampler, BatchSampler)
                 batch_sampler = loader.sampler if sampler_is_batch_sampler else loader.batch_sampler
                 
-                if loaded_num_samples >= loader.total_dataset_length:
+                if max_length - loaded_num_samples >= loader.total_dataset_length:
                     # will cycle through the whole set again, keep everything
-                    skip_num_batches = 0 
-                elif loader.total_dataset_length < max_length and (max_length - loaded_num_samples <= loader.total_dataset_length):
+                    skip_num_batches = 0
+                elif loader.total_dataset_length < max_length and (max_length - loaded_num_samples < loader.total_dataset_length):
                     # the last cycle, so skip the first few batches
                     skip_num_batches = (loader.total_dataset_length - (max_length - loaded_num_samples)) // batch_size
                 else:
@@ -1060,7 +1060,9 @@ def skip_first_batches(dataloader, num_batches=0):
                 )
                     
                 new_loaders[key] = new_dataloader
-            return CombinedLoader(new_loaders, mode="max_size_cycle")
+            new_loader = CombinedLoader(new_loaders, mode="max_size_cycle")
+            _ = iter(new_loader)
+            return new_loader
     except ImportError:
         logger.warning("No pytorch lightning found")
         
