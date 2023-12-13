@@ -1004,7 +1004,7 @@ def skip_first_batches(dataloader, num_batches=0):
             batch_sizes = set()
             
             for key, loader in dataloaders.items():
-                assert isinstance(loader, DataLoaderShard), f"loader class type is not supported: {str(type(loader))}"
+                assert isinstance(loader, DataLoaderShard), f"[{key}] loader class type is not supported: {str(type(loader))}"
                 max_length = max(loader.total_dataset_length, max_length)
                 batch_size = loader.total_batch_size
                 batch_sizes.add(batch_size)
